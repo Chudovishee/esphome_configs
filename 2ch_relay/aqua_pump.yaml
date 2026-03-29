@@ -1,0 +1,370 @@
+esphome:
+  name: aqua_pump
+
+esp32:
+  board: esp32dev
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+    version: recommended
+
+preferences:
+  flash_write_interval: 60s
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+  level: WARN
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+globals:
+  - id: pump_fault
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+
+  - id: pump_start_count
+    type: uint32_t
+    restore_value: yes
+    initial_value: '0'
+
+  - id: pump_total_work_ms
+    type: uint32_t
+    restore_value: yes
+    initial_value: '0'
+
+  - id: pump_last_timestamp_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+number:
+  - platform: template
+    name: "mA at 0 bar"
+    id: cal_ma_0bar
+    min_value: 0.0
+    max_value: 25.0
+    step: 0.01
+    mode: box
+    restore_value: true
+    optimistic: true
+    initial_value: 4.00
+    entity_category: config
+
+  - platform: template
+    name: "mA at 10 bar"
+    id: cal_ma_10bar
+    min_value: 0.0
+    max_value: 25.0
+    step: 0.01
+    mode: box
+    restore_value: true
+    optimistic: true
+    initial_value: 20.00
+    entity_category: config
+
+  - platform: template
+    name: "Minimum pressure"
+    id: min_pressure
+    unit_of_measurement: "bar"
+    min_value: 0.0
+    max_value: 10.0
+    step: 0.1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 0.0
+    entity_category: config
+
+  - platform: template
+    name: "Minimum pressure work time"
+    id: min_pressure_time
+    unit_of_measurement: "s"
+    min_value: 1
+    max_value: 600
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 10
+    entity_category: config
+
+  - platform: template
+    name: "Maximum pressure"
+    id: max_pressure
+    unit_of_measurement: "bar"
+    min_value: 0.0
+    max_value: 10.0
+    step: 0.1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 5.0
+    entity_category: config
+
+  - platform: template
+    name: "Maximum pressure work time"
+    id: max_pressure_time
+    unit_of_measurement: "s"
+    min_value: 1
+    max_value: 600
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 10
+    entity_category: config
+
+  - platform: template
+    name: "Maximum work time"
+    id: max_work_time
+    unit_of_measurement: "s"
+    min_value: 1
+    max_value: 86400
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 3600
+    entity_category: config
+
+
+  - platform: template
+    name: "Pressure"
+    id: pressure_setpoint
+    unit_of_measurement: "bar"
+    min_value: 0.0
+    max_value: 10.0
+    step: 0.1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 3.0
+
+  - platform: template
+    name: "Pressure Hysteresis"
+    id: pressure_hyst
+    unit_of_measurement: "bar"
+    min_value: 0.0
+    max_value: 5.0
+    step: 0.1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 0.5
+
+button:
+  - platform: template
+    name: "Reset Pump Fault"
+    on_press:
+      - lambda: |-
+          id(pump_fault) = false;
+          id(pump_fault_reason).publish_state("none");
+
+binary_sensor:
+  - platform: template
+    name: "Pump Fault"
+    id: pump_fault_bs
+    entity_category: diagnostic
+    lambda: |-
+      return id(pump_fault);
+
+text_sensor:
+  - platform: template
+    name: "Pump Fault Reason"
+    id: pump_fault_reason
+    update_interval: never
+    entity_category: diagnostic
+
+sensor:
+  - platform: adc
+    pin: GPIO35
+    id: loop_v
+    internal: true
+    update_interval: 200ms
+    attenuation: 11db
+    samples: 16
+
+  - platform: template
+    name: "Pump Starts"
+    id: pump_starts
+    accuracy_decimals: 0
+    state_class: total_increasing
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(pump_start_count);
+
+  - platform: template
+    name: "Pump Total Runtime"
+    id: pump_total_runtime
+    unit_of_measurement: "h"
+    accuracy_decimals: 2
+    state_class: total_increasing
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return id(pump_total_work_ms) / 3600000.0f;
+
+  - platform: template
+    name: "Pressure"
+    id: pressure
+    unit_of_measurement: "bar"
+    accuracy_decimals: 2
+    update_interval: 200ms
+    lambda: |-
+      const float R = 158.0f;  // Ом
+      float i_ma = (id(loop_v).state / R) * 1000.0f;
+
+      float i0 = id(cal_ma_0bar).state;    // мА при 0 bar
+      float i10 = id(cal_ma_10bar).state;  // мА при 10 bar
+
+      // защита от деления на ноль / неверной калибровки
+      if (fabsf(i10 - i0) < 0.001f) return NAN;
+
+      float p = (i_ma - i0) * (10.0f / (i10 - i0));
+
+      // ограничение диапазона
+      if (p < 0.0f) p = 0.0f;
+      if (p > 10.0f) p = 10.0f;
+
+      return p;
+    filters:
+      - median:
+          window_size: 3
+          send_every: 1
+      - exponential_moving_average:
+          alpha: 0.2
+          send_every: 1
+      - throttle: 1s
+    on_value:
+      then:
+        - lambda: |-
+            // Если ошибка — держим насос выключенным
+            if (id(pump_fault)) {
+              if (id(pump_relay).state) id(pump_relay).turn_off();
+              return;
+            }
+
+            // Автоматика работает только если разрешена
+            if (!id(pump_auto_enable).state) {
+              return;
+            }
+
+            // Обычное управление по уставке + гистерезис
+            float p  = x;
+            float sp = id(pressure_setpoint).state;
+            float h  = id(pressure_hyst).state;
+
+            float on_th  = sp - h;
+            float off_th = sp;
+
+            if (!id(pump_relay).state && p < on_th) {
+              id(pump_relay).turn_on();
+            } else if (id(pump_relay).state && p > off_th) {
+              id(pump_relay).turn_off();
+            }
+
+switch:
+  - platform: gpio
+    name: "Pump Relay"
+    id: pump_relay
+    pin: GPIO27
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - lambda: |-
+          id(pump_start_count)++;
+          id(pump_last_timestamp_ms) = millis();
+      - script.execute: min_pressure_check
+      - script.execute: max_pressure_check
+      - script.execute: max_work_check
+    on_turn_off:
+      - lambda: |-
+          if (id(pump_last_timestamp_ms) != 0) {
+            uint32_t now = millis();
+            id(pump_total_work_ms) += (uint32_t)(now - id(pump_last_timestamp_ms));
+            id(pump_last_timestamp_ms) = 0;
+          }
+      - script.stop: min_pressure_check
+      - script.stop: max_pressure_check
+      - script.stop: max_work_check
+
+  - platform: template
+    name: "Enable auto"
+    id: pump_auto_enable
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_off_action:
+      - switch.turn_off: pump_relay
+
+
+script:
+  - id: min_pressure_check
+    mode: restart
+    then:
+      - while:
+          condition:
+            switch.is_on: pump_relay
+          then:
+            - delay: !lambda |-
+                return (uint32_t)(id(min_pressure_time).state * 1000.0f);
+
+            - lambda: |-
+                if (!id(pump_relay).state) return;
+
+                const float p = id(pressure).state;
+                const float MIN_P = id(min_pressure).state;
+
+                if (isnan(p) || p <= MIN_P) {
+                  id(pump_fault_reason).publish_state("Too low pressure");
+                  id(pump_fault) = true;
+                  id(pump_relay).turn_off();
+                }
+
+  - id: max_pressure_check
+    mode: restart
+    then:
+      - while:
+          condition:
+            switch.is_on: pump_relay
+          then:
+            - delay: !lambda |-
+                return (uint32_t)(id(max_pressure_time).state * 1000.0f);
+
+            - lambda: |-
+                if (!id(pump_relay).state) return;
+
+                const float p = id(pressure).state;
+                const float MAX_P = id(max_pressure).state;
+
+                if (isnan(p) || p >= MAX_P) {
+                  id(pump_fault_reason).publish_state("Too high pressure");
+                  id(pump_fault) = true;
+                  id(pump_relay).turn_off();
+                }
+
+  - id: max_work_check
+    mode: restart
+    then:
+      - while:
+          condition:
+            switch.is_on: pump_relay
+          then:
+            - delay: !lambda |-
+                return (uint32_t)(id(max_work_time).state * 1000.0f);
+
+            - lambda: |-
+                if (!id(pump_relay).state) return;
+
+                id(pump_fault_reason).publish_state("Too long continuous work");
+                id(pump_fault) = true;
+                id(pump_relay).turn_off();
