@@ -20,23 +20,63 @@ ota:
 logger:
   baud_rate: 0
 
+one_wire:
+  - platform: gpio
+    pin: GPIO4
+    id: ow_bus
+
 # PWM выход
 output:
   - platform: esp8266_pwm
-    id: servo_output
+    id: servo_pwm_raw
     pin: D1          # GPIO5
     frequency: 50 Hz
+
+  - platform: template
+    id: servo_output
+    type: float
+    write_action:
+      - output.set_level:
+          id: servo_pwm_raw
+          level: !lambda |-
+            const float min_level = id(servo_min).state / 100.0f;
+            const float max_level = id(servo_max).state / 100.0f;
+            return min_level + state * (max_level - min_level);
 
 # Серва
 servo:
   - id: my_servo
     output: servo_output
-    min_level: 3%
-    max_level: 12%
-    idle_level: 7.5%
+    min_level: 0%
+    max_level: 100%
+    idle_level: 50%
+
+number:
+  - platform: template
+    name: "Servo Min Level"
+    id: servo_min
+    optimistic: true
+    restore_value: true
+    min_value: 1.0
+    max_value: 10.0
+    step: 0.1
+    initial_value: 3.0
+    unit_of_measurement: "%"
+    mode: box
+
+  - platform: template
+    name: "Servo Max Level"
+    id: servo_max
+    optimistic: true
+    restore_value: true
+    min_value: 1.0
+    max_value: 20.0
+    step: 0.1
+    initial_value: 4.0
+    unit_of_measurement: "%"
+    mode: box
 
 # Ползунок в Home Assistant (-1.0 до 1.0)
-number:
   - platform: template
     name: "Позиция сервы"
     id: servo_position
@@ -46,6 +86,7 @@ number:
     initial_value: 0.0
     optimistic: true
     restore_value: true
+    mode: box
     on_value:
       - servo.write:
           id: my_servo
@@ -83,3 +124,28 @@ button:
 binary_sensor:
   - platform: status
     name: "Статус подключения"
+
+
+sensor:
+  # - platform: dallas_temp
+  #   one_wire_id: ow_bus
+  #   address: 0xa80b244718101f28
+  #   name: "Температура 0xa80b244718101f28"
+  #   update_interval: 5s
+  # - platform: dallas_temp
+  #   one_wire_id: ow_bus
+  #   address: 0x710b244734f0e128
+  #   name: "Температура 0x710b244734f0e128"
+  #   update_interval: 5s
+
+  - platform: dallas_temp
+    one_wire_id: ow_bus
+    address: 0xfc0008032add3810
+    name: "Температура 0xfc0008032add3810"
+    update_interval: 1s
+
+  - platform: dallas_temp
+    one_wire_id: ow_bus
+    address: 0xb800080337cbbd10
+    name: "спальня 1"
+    update_interval: 1s
