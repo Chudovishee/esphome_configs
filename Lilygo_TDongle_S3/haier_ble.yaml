@@ -1,0 +1,123 @@
+esphome:
+  name: haier
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+uart:
+  id: ac_port
+  baud_rate: 9600
+  tx_pin: 19
+  rx_pin: 20
+
+logger:
+  level: WARN
+
+climate:
+  - platform: haier
+    id: haier_ac
+    protocol: smartAir2
+    name: Haier SmartAir2 Climate
+    uart_id: ac_port
+    # alternative_swing_control: false
+    # wifi_signal: true
+    visual:
+      min_temperature: 16 °C
+      max_temperature: 30 °C
+      temperature_step: 1 °C
+    supported_modes:
+      - 'OFF'
+      - HEAT_COOL
+      - COOL
+      - HEAT
+      - DRY
+      - FAN_ONLY
+    supported_swing_modes:
+      - 'OFF'
+      - VERTICAL
+      - HORIZONTAL
+      - BOTH
+    supported_presets:
+      - BOOST
+      - COMFORT
+      - AWAY
+
+switch:
+  - platform: haier
+    health_mode:
+      name: Haier SmartAir2 Climate health mode
+    display:
+      name: Haier SmartAir2 Climate display
+
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: false
+    interval: 320ms
+    window: 300ms
+
+binary_sensor:
+  - platform: ble_presence
+    name: "iPhone iBeacon Present"
+    ibeacon_uuid: 5526EA76-C343-49DA-9218-1322C79D74E3
+    ibeacon_major: 1
+    ibeacon_minor: 1
+    timeout: 10s
+
+sensor:
+  - platform: ble_rssi
+    id: iphone_rssi
+    name: "iPhone iBeacon RSSI"
+    ibeacon_uuid: 5526EA76-C343-49DA-9218-1322C79D74E3
+    ibeacon_major: 1
+    ibeacon_minor: 1
+
+  - platform: template
+    name: "iPhone Distance Estimate"
+    unit_of_measurement: "m"
+    accuracy_decimals: 1
+    update_interval: 2s
+    lambda: |-
+      if (isnan(id(iphone_rssi).state)) return NAN;
+
+      // Примерные значения, потом можно откалибровать
+      const float tx_power_1m = -62.0;  // RSSI на 1 метре
+      const float n = 2.7;              // квартира / офис
+
+      float rssi = id(iphone_rssi).state;
+      float distance = powf(10.0f, (tx_power_1m - rssi) / (10.0f * n));
+
+      // Ограничим верхнюю границу, чтобы не было странных чисел
+      if (distance > 15.0f) distance = 15.0f;
+
+      return distance;
+
+text_sensor:
+  - platform: template
+    name: "iPhone BLE Zone"
+    update_interval: 2s
+    lambda: |-
+      if (isnan(id(iphone_rssi).state)) return {"unknown"};
+
+      float rssi = id(iphone_rssi).state;
+
+      if (rssi > -60) return {"very close (~0-2 m)"};
+      if (rssi > -70) return {"near (~2-5 m)"};
+      if (rssi > -80) return {"far (~5-10 m)"};
+      return {"very far / weak signal"};
