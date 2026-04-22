@@ -1,0 +1,6 @@
+substitutions:
+  device_name: hvac-bedroom-1
+  friendly_name: HVAC Bedroom 1
+
+packages:
+  base: !include common.yaml

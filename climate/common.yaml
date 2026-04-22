@@ -1,5 +1,6 @@
 esphome:
-  name: test
+  name: ${device_name}
+  friendly_name: ${friendly_name}
   platformio_options:
     board_build.flash_mode: dio
 
@@ -19,6 +20,7 @@ ota:
     password: !secret ota_password
 
 logger:
+  level: WARN
   baud_rate: 0
 
 
@@ -32,7 +34,7 @@ climate:
   - platform: haier
     id: haier_ac
     protocol: smartAir2
-    name: Haier SmartAir2 Climate
+    name: ${friendly_name} climate
     uart_id: ac_port
     visual:
       min_temperature: 16 °C
@@ -58,6 +60,6 @@ climate:
 switch:
   - platform: haier
     health_mode:
-      name: Haier SmartAir2 Climate health mode
+      name: ${friendly_name} Climate health mode
     display:
-      name: Haier SmartAir2 Climate display
+      name: ${friendly_name} Climate display

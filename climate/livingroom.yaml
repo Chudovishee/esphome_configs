@@ -1,0 +1,6 @@
+substitutions:
+  device_name: hvac-living-room
+  friendly_name: HVAC Living room
+
+packages:
+  base: !include common.yaml
