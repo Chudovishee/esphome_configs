@@ -1,0 +1,194 @@
+esphome:
+  name: esp32-test
+
+esp32:
+  board: esp32dev
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+logger:
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+# one_wire:
+#   - platform: ds2484
+#     active_pullup: true
+#     strong_pullup: true
+#     address: 0x18
+#     id: ow_bus
+
+sensor:
+  # - platform: dallas_temp
+  #   one_wire_id: ow_bus
+  #   address: 0xa80b244718101f28
+  #   name: "Температура 0xa80b244718101f28"
+  #   update_interval: 5s
+
+  # - platform: dallas_temp
+  #   one_wire_id: ow_bus
+  #   address: 0x710b244734f0e128
+  #   name: "Температура 0x710b244734f0e128"
+  #   update_interval: 1s
+
+  # - platform: dallas_temp
+  #   one_wire_id: ow_bus
+  #   address: 0xfc0008032add3810
+  #   name: "Температура 0xfc0008032add3810"
+  #   update_interval: 1s
+
+  # - platform: dallas_temp
+  #   one_wire_id: ow_bus
+  #   address: 0xb800080337cbbd10
+  #   name: "спальня 1"
+  #   update_interval: 5s
+
+  - platform: adc
+    pin: GPIO34
+    id: acs758_adc
+    name: "ACS758 ADC Voltage"
+    attenuation: 11db
+    update_interval: 500ms
+    filters:
+      - sliding_window_moving_average:
+          window_size: 3
+          send_every: 1
+
+  # Ток в амперах
+  - platform: template
+    name: "ACS758 Current"
+    id: acs758_current
+    unit_of_measurement: A
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 500ms
+    lambda: |-
+      float v = id(acs758_adc).state;
+
+      // Для делителя 1:1:
+      // 2.5V на выходе ACS758 -> 1.25V на входе ESP32 при нулевом токе
+      float zero_current_voltage = 1.67;
+
+      // Пример для датчика 40 мВ/А на выходе ACS758
+      // После делителя 1:1 это 20 мВ/А = 0.020 V/A
+      float sensitivity = 0.033;
+
+      return (v - zero_current_voltage) / sensitivity;
+
+
+pca9685:
+  - id: pca1
+    address: 0x40
+    frequency: 50
+
+# PWM выход
+output:
+  # - platform: ledc
+  #   id: servo_pwm_raw
+  #   pin: GPIO15          # GPIO5
+  #   frequency: 50 Hz
+
+  - platform: pca9685
+    id: servo_pwm_0
+    pca9685_id: pca1
+    channel: 0
+
+  - platform: template
+    id: servo_output
+    type: float
+    write_action:
+      - output.set_level:
+          id: servo_pwm_0
+          level: !lambda |-
+            const float min_level = id(servo_min).state / 100.0f;
+            const float max_level = id(servo_max).state / 100.0f;
+            return min_level + state * (max_level - min_level);
+
+# Серва
+servo:
+  - id: my_servo
+    output: servo_output
+    min_level: 0%
+    max_level: 100%
+    idle_level: 50%
+
+number:
+  - platform: template
+    name: "Servo Min Level"
+    id: servo_min
+    optimistic: true
+    restore_value: true
+    min_value: 1.0
+    max_value: 10.0
+    step: 0.1
+    initial_value: 3.0
+    unit_of_measurement: "%"
+    mode: box
+
+  - platform: template
+    name: "Servo Max Level"
+    id: servo_max
+    optimistic: true
+    restore_value: true
+    min_value: 1.0
+    max_value: 20.0
+    step: 0.1
+    initial_value: 4.0
+    unit_of_measurement: "%"
+    mode: box
+
+  - platform: template
+    name: "Позиция сервы"
+    id: servo_position
+    min_value: -1.0
+    max_value: 1.0
+    step: 0.01
+    initial_value: 0.0
+    optimistic: true
+    restore_value: true
+    mode: box
+    on_value:
+      - servo.write:
+          id: my_servo
+          level: !lambda "return x;"
+
+# Кнопки управления
+button:
+  - platform: template
+    name: "Серво 0°"
+    on_press:
+      - number.set:
+          id: servo_position
+          value: -1.0
+
+  - platform: template
+    name: "Серво 90°"
+    on_press:
+      - number.set:
+          id: servo_position
+          value: 0.0
+
+  - platform: template
+    name: "Серво 180°"
+    on_press:
+      - number.set:
+          id: servo_position
+          value: 1.0
+
+  - platform: template
+    name: "Отключить серву"
+    on_press:
+      - servo.detach: my_servo
